@@ -35,7 +35,6 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            docker.pkg.github.com/americanbinary/echoip:${{ github.sha }}
-            docker.pkg.github.com/americanbinary/echoip:${{ github.event.release.tag_name }}
+          tags: docker.pkg.github.com/americanbinary/echoip:v1-test
+            
     
