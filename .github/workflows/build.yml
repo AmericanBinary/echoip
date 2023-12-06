@@ -1,0 +1,41 @@
+name: build
+
+on:
+  push:
+    branches: [ci-cd]
+  pull_request:
+    branches: [ci-cd]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: install go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.16
+
+      - name: build and test
+        run: make
+
+      - name: Log in to GitHub Docker Registry
+        uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
+        with:
+          registry: docker.YOUR-HOSTNAME.com
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
+        with:
+          context: .
+          push: true
+          tags: |
+            docker.YOUR-HOSTNAME.com/${{ github.repository }}/octo-image:${{ github.sha }}
+            docker.YOUR-HOSTNAME.com/${{ github.repository }}/octo-image:${{ github.event.release.tag_name }}
+    
