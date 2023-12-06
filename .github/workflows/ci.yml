@@ -2,9 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [master]
+    branches: [ci-cd]
   pull_request:
-    branches: [master]
+    branches: [ci-cd]
 
 jobs:
   build:
@@ -21,10 +21,10 @@ jobs:
       - name: build and test
         run: make
       - name: enable experimental docker features
-        if: ${{ github.ref == 'refs/heads/master' }}
+        if: ${{ github.ref == 'refs/heads/ci-cd' }}
         run: |
           echo '{"experimental":true}' | sudo tee /etc/docker/daemon.json
           sudo service docker restart
       - name: publish multi-arch docker image
-        if: ${{ github.ref == 'refs/heads/master' }}
+        if: ${{ github.ref == 'refs/heads/ci-cd' }}
         run: make docker-pushx
