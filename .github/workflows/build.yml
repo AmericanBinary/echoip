@@ -36,7 +36,7 @@ jobs:
           context: .
           push: true
           tags: |
-            docker.pkg.github.com/americanbinary/echoip/echoip/echoip:v1-test
-            docker.pkg.github.com/americanbinary/echoip/echoip/echoip:v1-test-1
+            docker.pkg.github.com/americanbinary/echoip/echoip/echoip:v1
+            
             
     
