@@ -31,13 +31,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@3b5e8027fcad23fda98b2e3ac259d8d67585f671
-        with:
-          context: .
-          push: true
-          tags: |
-            docker.pkg.github.com/americanbinary/echoip/echoip/echoip:v1
-            docker.pkg.github.com/americanbinary/echoip/echoip/echoip:${{ github.sha }}
+        run: |
+          docker buildx build \
+            --file Dockerfile \
+            --platform linux/amd64,linux/arm64 \
+            --tag docker.pkg.github.com/americanbinary/echoip/echoip/echoip:v1 \
+            --tag docker.pkg.github.com/americanbinary/echoip/echoip/echoip:${{ github.sha }}
+            --push .
+
 
             
             
