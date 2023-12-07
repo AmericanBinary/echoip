@@ -43,7 +43,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            dghcr.io/americanbinary/echoip/echoip/echoip:v1
+            ghcr.io/americanbinary/echoip/echoip/echoip:v1
             ghcr.io/americanbinary/echoip/echoip/echoip:${{ github.sha }}
 
 
