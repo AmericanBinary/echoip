@@ -32,6 +32,7 @@ jobs:
 
       - name: Build and push Docker image
         run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login docker.pkg.github.com -u ${{ github.actor }} --password-stdin
           docker buildx create --name mybuilder --bootstrap --use
           docker buildx build --platform linux/amd64,linux/arm64 -t docker.pkg.github.com/americanbinary/echoip/echoip/echoip:v1 --push .
 
