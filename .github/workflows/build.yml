@@ -32,6 +32,7 @@ jobs:
 
       - name: Build and push Docker image
         run: |
+          docker buildx create --name mybuilder --bootstrap --use
           docker buildx build \
             --file Dockerfile \
             --platform linux/amd64,linux/arm64 \
