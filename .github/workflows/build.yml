@@ -37,6 +37,8 @@ jobs:
           push: true
           tags: |
             docker.pkg.github.com/americanbinary/echoip/echoip/echoip:v1
+            docker.pkg.github.com/americanbinary/echoip/echoip/echoip:${{ github.sha }}
+
             
             
     
