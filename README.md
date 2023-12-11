@@ -1,6 +1,6 @@
 # echoip
 
-![Build Status](https://github.com/mpolden/echoip/workflows/ci/badge.svg)
+![Build Status](https://github.com/AmericanBinary/echoip/workflows/ci/badge.svg)
 
 A simple service for looking up your IP address. This is the code that powers
 https://ifconfig.co.
@@ -98,7 +98,7 @@ between IPv4 and IPv6 lookup.
 Compiling requires the [Golang compiler](https://golang.org/) to be installed.
 This package can be installed with:
 
-`go install github.com/mpolden/echoip/...@latest`
+`go install github.com/AmericanBinary/echoip/...@latest`
 
 For more information on building a Go project, see the [official Go
 documentation](https://golang.org/doc/code.html).
@@ -106,9 +106,9 @@ documentation](https://golang.org/doc/code.html).
 ## Docker image
 
 A Docker image is available on [Docker
-Hub](https://hub.docker.com/r/mpolden/echoip), which can be downloaded with:
+Hub](https://hub.docker.com/r/AmericanBinary/echoip), which can be downloaded with:
 
-`docker pull mpolden/echoip`
+`docker pull AmericanBinary/echoip`
 
 ## [GeoIP](https://www.maxmind.com/en/geoip2-databases)/[GeoLite](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data?) Database (MaxMind)
 To utilise MaxMind [GeoIP](https://www.maxmind.com/en/geoip2-databases)/[GeoLite](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data?) database to enhance the information provided to end users, you can download the relevant **binary** databases (`.mmdb` format) directly from MaxMind using the above links.

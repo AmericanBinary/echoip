@@ -1,5 +1,5 @@
 DOCKER ?= docker
-DOCKER_IMAGE ?= mpolden/echoip-test
+DOCKER_IMAGE ?= AmericanBinary/echoip-test
 OS := $(shell uname)
 ifeq ($(OS),Linux)
 	TAR_OPTS := --wildcards
