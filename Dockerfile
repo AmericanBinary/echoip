@@ -1,6 +1,6 @@
 # Build
 FROM golang:1.15-buster AS build
-WORKDIR /go/src/github.com/mpolden/echoip
+WORKDIR /go/src/github.com/AmericanBinary/echoip
 COPY . .
 
 # Must build without cgo because libc is unavailable in runtime image
