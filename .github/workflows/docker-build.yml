@@ -4,15 +4,14 @@ on:
   pull_request:
     types:
       - closed
-  push:
-    branches:
-      - docker-build-fix
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.base.ref == 'master' && github.event.pull_request.merged == true
+
     steps:
       - uses: actions/checkout@v2
       
