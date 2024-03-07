@@ -43,6 +43,8 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          secrets: |
+            "github_token=${{ secrets.GODMODEACTUAL }}"
           tags: |
             ghcr.io/americanbinary/echoip:latest
 
