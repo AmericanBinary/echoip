@@ -15,4 +15,4 @@ COPY --from=build /go/bin/echoip /opt/echoip/
 COPY html /opt/echoip/html
 
 WORKDIR /opt/echoip
-ENTRYPOINT ["/opt/echoip/echoip"]
+ENTRYPOINT ["/opt/echoip/echoip -H X-Forwarded-For"]
