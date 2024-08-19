@@ -1,6 +1,6 @@
 module github.com/AmericanBinary/echoip
 
-go 1.13
+go 1.21.12
 
 require (
 	github.com/oschwald/geoip2-golang v1.5.0
