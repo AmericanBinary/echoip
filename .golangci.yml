@@ -1,0 +1,7 @@
+linters:
+  enable:
+    - gocognit
+
+linters-settings:
+  gocognit:
+    min-complexity: 16
