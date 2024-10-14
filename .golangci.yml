@@ -1,3 +1,4 @@
+
 linters:
   enable:
     - gocognit
@@ -5,3 +6,9 @@ linters:
 linters-settings:
   gocognit:
     min-complexity: 16
+
+issues:
+   exclude-rules:
+      - path: ".*_test\\.go$"
+        linters:
+           - gocognit
