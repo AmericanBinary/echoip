@@ -45,4 +45,4 @@ jobs:
           secrets: |
             "github_token=${{ secrets.GODMODEACTUAL }}"
           tags: |
-            ghcr.io/americanbinary/echoip:v1
+            ghcr.io/americanbinary/echoip:latest
