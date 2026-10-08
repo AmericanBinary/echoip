@@ -209,7 +209,7 @@ jobs:
 
   release-image-ambit-registry-prod:
     runs-on: ubuntu-latest
-    needs: [ release, version ]
+    needs: [ image, version ]
     if: needs.version.outputs.tag_version != '1'
     steps:
       - name: determine target environment
