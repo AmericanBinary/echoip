@@ -99,7 +99,7 @@ jobs:
             "github_token=${{ secrets.GODMODEACTUAL }}"
           tags: |
             ghcr.io/americanbinary/echoip:latest
-            ghcr.io/americanbinary/ambitclientbackendservice:v${VERSION}
+            ghcr.io/americanbinary/echoip:v${VERSION}
 
   release:
     runs-on: ubuntu-latest
