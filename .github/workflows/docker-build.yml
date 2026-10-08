@@ -2,24 +2,30 @@ name: build
 
 on:
   pull_request:
-    types:
-      - closed
+    branches: &branches
+      - master
+    types: [ opened, synchronize, reopened ]
+  push:
+    branches: *branches
+
+env:
+  APP: echoip
+  APP_PKG: ./
+  APP_DIR: ./
+  AWS_ROLE_SUFFIX: repo-ecr-push
+  AWS_ECS_SERVICE_NAME: repo-auth
+
+permissions:
+  contents: write
+  id-token: write
+  packages: write
+  pull-requests: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      packages: write
-      contents: read
-    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.base.ref == 'master' && github.event.pull_request.merged == true
-
     steps:
       - uses: actions/checkout@v2
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
 
       - name: install go
         uses: actions/setup-go@v2
@@ -28,6 +34,53 @@ jobs:
 
       - name: build and test
         run: make
+
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_version: "${{ steps.version_check.outputs.check_txt_contents }}"
+      version: "${{ steps.version_check.outputs.version_value }}"
+      previous_version: "${{ steps.version_check.outputs.previous_version_value }}"
+    steps:
+      - uses: actions/checkout@v7
+      - run: git fetch --tags && git tag | head -n 1
+      - id: version_check
+        run: |
+          ./.github/version_check.sh
+          check_txt_contents=$(cat check.txt)
+          echo "Version is $check_txt_contents"
+          echo "check_txt_contents=${check_txt_contents}" >> "${GITHUB_OUTPUT}"
+          version_value="$(cat version/version.go | grep 'const Version' | awk '{print $NF}' | tr -d '"')"
+          echo "version_value=${version_value}" >> "${GITHUB_OUTPUT}"
+          previous_version_value=$(git describe --tags $(git rev-list --tags --max-count=1) | tr -d 'v')
+          echo "previous_version_value=${previous_version_value}" >> "${GITHUB_OUTPUT}"
+      - name: debug
+        env:
+          TAG_VERSION: "${{ steps.version_check.outputs.check_txt_contents }}"
+          VERSION: "${{ steps.version_check.outputs.version_value }}"
+          PREVIOUS_VERSION: "${{ steps.version_check.outputs.previous_version_value }}"
+        run: echo "version is ${VERSION} (previous = ${PREVIOUS_VERSION}) and TAG_VERSION is ${TAG_VERSION}"
+      - name: same version error message
+        if: steps.version_check.outputs.check_txt_contents == '1'
+        run: |
+          echo "::warning::version is same when compared to previous version please increment the release version for further release process"
+
+  image:
+    runs-on: ubuntu-latest
+    needs: [ build, version ]
+    if: needs.version.outputs.tag_version != '1' && github.event_name == 'push' && github.ref_name == 'master'
+    env:
+      TAG_VERSION: "${{ needs.version.outputs.tag_version }}"
+      VERSION: "${{ needs.version.outputs.version }}"
+      PREVIOUS_VERSION: "${{ needs.version.outputs.previous_version }}"
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Docker Registry
         uses: docker/login-action@v3
@@ -46,3 +99,149 @@ jobs:
             "github_token=${{ secrets.GODMODEACTUAL }}"
           tags: |
             ghcr.io/americanbinary/echoip:latest
+            ghcr.io/americanbinary/ambitclientbackendservice:v${VERSION}
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build, version]
+    if: needs.version.outputs.tag_version != '1' && github.event_name == 'push' && github.ref_name == 'master'
+    env:
+      TAG_VERSION: "${{ needs.version.outputs.tag_version }}"
+      VERSION: "${{ needs.version.outputs.version }}"
+      PREVIOUS_VERSION: "${{ needs.version.outputs.previous_version }}"
+    steps:
+      - run: echo "version is ${VERSION} (previous = ${PREVIOUS_VERSION}) and TAG_VERSION is ${TAG_VERSION}"
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: '0'
+      - uses: actions/download-artifact@v8
+        with:
+          path: ./
+      - name: debug
+        run: find .
+      - name: Delete old Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "v${VERSION}" --cleanup-tag --yes || true
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }}
+          generate_release_notes: true
+          previous_tag: v${{ env.PREVIOUS_VERSION }}
+          files: |
+            ${{ env.APP }}_*
+            *.zip
+      - name: Check for commits between tags
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eux -o pipefail
+          echo "gh api step"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            /repos/AmericanBinary/${GITHUB_REPOSITORY#*/}/compare/v${PREVIOUS_VERSION}...v${VERSION} \
+            | tee gh-api
+          echo "jq total_commits step"
+          cat gh-api | jq -r .total_commits > gh-api-total-commits
+          if [[ $(cat gh-api-total-commits) == "0" ]]
+          then
+            echo "NO COMMITS FOUND"
+            echo "NO_COMMITS=1" >> "${GITHUB_ENV}"
+          fi
+      - name: Update CHANGELOG
+        id: changelog
+        if: env.NO_COMMITS != '1'
+        uses: requarks/changelog-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: v${{ env.VERSION }}
+          includeInvalidCommits: true
+          excludeTypes: style
+      - name: Commit CHANGELOG.md
+        if: env.NO_COMMITS != '1'
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          branch: changelog
+          commit_message: "docs: update CHANGELOG.md for ${{ github.ref_name }} [skip ci]"
+          file_pattern: CHANGELOG.md
+
+  release-image-ambit-registry-dev:
+    runs-on: ubuntu-latest
+    needs: [ image, version ]
+    if: needs.version.outputs.tag_version != '1'
+    steps:
+      - name: determine target environment
+        env:
+          github_event_name: "${{ github.event_name }}"
+          github_ref_name: "${{ github.ref_name }}"
+        run: |
+          set -eux -o pipefail
+          echo "target_environment=dev" >> "${GITHUB_ENV}"
+          echo "target_repo=repo.dev.edge.ambit.inc" >> "${GITHUB_ENV}"
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-region: 'us-east-1'
+          role-to-assume: 'arn:aws:iam::372108847118:role/${{ env.target_environment }}-image-reg-registry-push'
+      - run: |
+          set -eux -o pipefail
+          token=$(
+            curl -fSs -X POST "https://login.microsoftonline.com/3390a7ac-e80c-4cf8-a217-02099a3a22b7/oauth2/v2.0/token" \
+              -H 'Content-Type: application/x-www-form-urlencoded' \
+              --data-urlencode "client_id=8dd3d59c-6996-4134-beee-2f63dd62c43e" \
+              --data-urlencode "client_secret=$(aws ssm get-parameter --with-decryption --name /${target_environment}/image-reg-auth-gha/repo-app-client-secret --output text --query Parameter.Value)" \
+              --data-urlencode 'grant_type=client_credentials' \
+              --data-urlencode "scope=api://${target_environment}-repo-int-app/.default" \
+              | jq -r .access_token
+          )
+          echo "${token}" | docker login ${target_repo} -u Ambit --password-stdin
+      - name: release image to registry
+        env:
+          VERSION: ${{ needs.version.outputs.VERSION }}
+        run:
+          set -eux -o pipefail
+          docker buildx imagetools create \
+          --tag ${target_repo}/${APP}:latest \
+          --tag ${target_repo}/${APP}:v${VERSION}
+          ;
+
+  release-image-ambit-registry-prod:
+    runs-on: ubuntu-latest
+    needs: [ image, version ]
+    if: needs.version.outputs.tag_version != '1'
+    steps:
+      - name: determine target environment
+        env:
+          github_event_name: "${{ github.event_name }}"
+          github_ref_name: "${{ github.ref_name }}"
+        run: |
+          set -eux -o pipefail
+          echo "target_environment=prod" >> "${GITHUB_ENV}"
+          echo "target_repo=repo.edge.ambit.inc" >> "${GITHUB_ENV}"
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-region: 'us-east-1'
+          role-to-assume: 'arn:aws:iam::372108847118:role/${{ env.target_environment }}-image-reg-registry-push'
+      - run: |
+          set -eux -o pipefail
+          token=$(
+            curl -fSs -X POST "https://login.microsoftonline.com/3390a7ac-e80c-4cf8-a217-02099a3a22b7/oauth2/v2.0/token" \
+              -H 'Content-Type: application/x-www-form-urlencoded' \
+              --data-urlencode "client_id=8dd3d59c-6996-4134-beee-2f63dd62c43e" \
+              --data-urlencode "client_secret=$(aws ssm get-parameter --with-decryption --name /${target_environment}/image-reg-auth-gha/repo-app-client-secret --output text --query Parameter.Value)" \
+              --data-urlencode 'grant_type=client_credentials' \
+              --data-urlencode "scope=api://${target_environment}-repo-int-app/.default" \
+              | jq -r .access_token
+          )
+          echo "${token}" | docker login ${target_repo} -u Ambit --password-stdin
+      - name: release image to registry
+        env:
+          VERSION: ${{ needs.version.outputs.VERSION }}
+        run:
+          set -eux -o pipefail
+          docker buildx imagetools create \
+          --tag ${target_repo}/${APP}:latest \
+          --tag ${target_repo}/${APP}:v${VERSION}
+          ;
