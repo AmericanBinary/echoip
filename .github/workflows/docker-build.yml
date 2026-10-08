@@ -190,7 +190,7 @@ jobs:
           token=$(
             curl -fSs -X POST "https://login.microsoftonline.com/3390a7ac-e80c-4cf8-a217-02099a3a22b7/oauth2/v2.0/token" \
               -H 'Content-Type: application/x-www-form-urlencoded' \
-              --data-urlencode "client_id=8dd3d59c-6996-4134-beee-2f63dd62c43e" \
+              --data-urlencode "client_id=$(aws ssm get-parameter --with-decryption --name /${target_environment}/image-reg-auth-gha/repo-app-client-id --output text --query Parameter.Value)" \
               --data-urlencode "client_secret=$(aws ssm get-parameter --with-decryption --name /${target_environment}/image-reg-auth-gha/repo-app-client-secret --output text --query Parameter.Value)" \
               --data-urlencode 'grant_type=client_credentials' \
               --data-urlencode "scope=api://${target_environment}-repo-int-app/.default" \
@@ -229,7 +229,7 @@ jobs:
           token=$(
             curl -fSs -X POST "https://login.microsoftonline.com/3390a7ac-e80c-4cf8-a217-02099a3a22b7/oauth2/v2.0/token" \
               -H 'Content-Type: application/x-www-form-urlencoded' \
-              --data-urlencode "client_id=8dd3d59c-6996-4134-beee-2f63dd62c43e" \
+              --data-urlencode "client_id=$(aws ssm get-parameter --with-decryption --name /${target_environment}/image-reg-auth-gha/repo-app-client-id --output text --query Parameter.Value)" \
               --data-urlencode "client_secret=$(aws ssm get-parameter --with-decryption --name /${target_environment}/image-reg-auth-gha/repo-app-client-secret --output text --query Parameter.Value)" \
               --data-urlencode 'grant_type=client_credentials' \
               --data-urlencode "scope=api://${target_environment}-repo-int-app/.default" \
