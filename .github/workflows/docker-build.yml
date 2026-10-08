@@ -65,7 +65,7 @@ jobs:
         run: |
           echo "::warning::version is same when compared to previous version please increment the release version for further release process"
 
-  release:
+  image:
     runs-on: ubuntu-latest
     needs: [ build, version ]
     if: needs.version.outputs.tag_version != '1' && github.event_name == 'push' && github.ref_name == 'master'
@@ -101,9 +101,76 @@ jobs:
             ghcr.io/americanbinary/echoip:latest
             ghcr.io/americanbinary/ambitclientbackendservice:v${VERSION}
 
+  release:
+    runs-on: ubuntu-latest
+    needs: [build, version]
+    if: needs.version.outputs.tag_version != '1' && github.event_name == 'push' && github.ref_name == 'master'
+    env:
+      TAG_VERSION: "${{ needs.version.outputs.tag_version }}"
+      VERSION: "${{ needs.version.outputs.version }}"
+      PREVIOUS_VERSION: "${{ needs.version.outputs.previous_version }}"
+    steps:
+      - run: echo "version is ${VERSION} (previous = ${PREVIOUS_VERSION}) and TAG_VERSION is ${TAG_VERSION}"
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: '0'
+      - uses: actions/download-artifact@v8
+        with:
+          path: ./
+      - name: debug
+        run: find .
+      - name: Delete old Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "v${VERSION}" --cleanup-tag --yes || true
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }}
+          generate_release_notes: true
+          previous_tag: v${{ env.PREVIOUS_VERSION }}
+          files: |
+            ${{ env.APP }}_*
+            *.zip
+      - name: Check for commits between tags
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eux -o pipefail
+          echo "gh api step"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            /repos/AmericanBinary/${GITHUB_REPOSITORY#*/}/compare/v${PREVIOUS_VERSION}...v${VERSION} \
+            | tee gh-api
+          echo "jq total_commits step"
+          cat gh-api | jq -r .total_commits > gh-api-total-commits
+          if [[ $(cat gh-api-total-commits) == "0" ]]
+          then
+            echo "NO COMMITS FOUND"
+            echo "NO_COMMITS=1" >> "${GITHUB_ENV}"
+          fi
+      - name: Update CHANGELOG
+        id: changelog
+        if: env.NO_COMMITS != '1'
+        uses: requarks/changelog-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: v${{ env.VERSION }}
+          includeInvalidCommits: true
+          excludeTypes: style
+      - name: Commit CHANGELOG.md
+        if: env.NO_COMMITS != '1'
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          branch: changelog
+          commit_message: "docs: update CHANGELOG.md for ${{ github.ref_name }} [skip ci]"
+          file_pattern: CHANGELOG.md
+
   release-image-ambit-registry-dev:
     runs-on: ubuntu-latest
-    needs: [ release, version ]
+    needs: [ image, version ]
     if: needs.version.outputs.tag_version != '1'
     steps:
       - name: determine target environment
