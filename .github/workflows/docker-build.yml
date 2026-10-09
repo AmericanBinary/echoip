@@ -151,6 +151,16 @@ jobs:
             echo "NO COMMITS FOUND"
             echo "NO_COMMITS=1" >> "${GITHUB_ENV}"
           fi
+      - name: Check out changelog branch
+        if: env.NO_COMMITS != '1'
+        run: |
+          set -eux -o pipefail
+          git fetch origin '+refs/heads/changelog:refs/remotes/origin/changelog' || true
+          if git rev-parse --verify --quiet origin/changelog; then
+            git checkout -B changelog origin/changelog
+          else
+            git checkout -b changelog
+          fi
       - name: Update CHANGELOG
         id: changelog
         if: env.NO_COMMITS != '1'
@@ -165,6 +175,8 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v7
         with:
           branch: changelog
+          skip_fetch: true
+          skip_checkout: true
           commit_message: "docs: update CHANGELOG.md for ${{ github.ref_name }} [skip ci]"
           file_pattern: CHANGELOG.md
 
@@ -197,15 +209,17 @@ jobs:
               | jq -r .access_token
           )
           echo "${token}" | docker login ${target_repo} -u Ambit --password-stdin
+      - run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: release image to registry
         env:
           VERSION: ${{ needs.version.outputs.VERSION }}
-        run:
+        run: |
           set -eux -o pipefail
           docker buildx imagetools create \
-          --tag ${target_repo}/${APP}:latest \
-          --tag ${target_repo}/${APP}:v${VERSION}
-          ;
+            --tag ${target_repo}/${APP}:latest \
+            --tag ${target_repo}/${APP}:v${VERSION} \
+            ghcr.io/americanbinary/${APP}:v${VERSION} \
+            ;
 
   release-image-ambit-registry-prod:
     runs-on: ubuntu-latest
@@ -236,12 +250,14 @@ jobs:
               | jq -r .access_token
           )
           echo "${token}" | docker login ${target_repo} -u Ambit --password-stdin
+      - run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: release image to registry
         env:
           VERSION: ${{ needs.version.outputs.VERSION }}
-        run:
+        run: |
           set -eux -o pipefail
           docker buildx imagetools create \
-          --tag ${target_repo}/${APP}:latest \
-          --tag ${target_repo}/${APP}:v${VERSION}
-          ;
+            --tag ${target_repo}/${APP}:latest \
+            --tag ${target_repo}/${APP}:v${VERSION} \
+            ghcr.io/americanbinary/${APP}:v${VERSION} \
+            ;
