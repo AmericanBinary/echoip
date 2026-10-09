@@ -1,0 +1,29 @@
+apiVersion: jib/v1alpha1
+kind: BuildFile
+
+from:
+  image: ghcr.io/americanbinary/container-images-base-alpine:latest
+  platforms:
+    - architecture: ${arch}
+      os: linux
+
+creationTime: 1970-01-01T00:00:01Z
+format: Docker
+
+entrypoint:
+  - /main
+  - "-p"
+  - "-r"
+  - "-H"
+  - "X-Forwarded-For"
+
+layers:
+  entries:
+    - name: app
+      files:
+        - src: ${file}
+          dest: /main
+          properties:
+            filePermissions: 755
+        - src: html
+          dest: /html

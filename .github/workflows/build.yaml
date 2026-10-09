@@ -1,0 +1,580 @@
+defaults:
+  run:
+    shell: bash
+
+env:
+  CGO_ENABLED: 1
+  # https://github.com/GoogleContainerTools/jib/releases/tag/v0.13.0-cli
+  JIB_VERSION: '0.13.0'
+
+  APP: echoip
+  APP_PKG: ./cmd/echoip
+  APP_DIR: ./
+  FE_ENABLED: false
+  FE_DIR: ./echoipweb
+  FE_TARGET: ./public
+  AWS_ROLE_SUFFIX: repo-ecr-push
+  AWS_ECS_SERVICE_NAME: repo-auth
+
+on:
+  pull_request:
+    branches: &branches
+      - master
+    # paths: &paths
+    #   - .github/workflows/docker-registry-auth-docker-build.yaml
+    #   - tools/images/docker-registry-auth/**
+    types: [ opened, synchronize, reopened ]
+  push:
+    branches: *branches
+    # paths: *paths
+
+permissions:
+  contents: write
+  id-token: write
+  packages: write
+  pull-requests: write
+
+jobs:
+  config:
+    runs-on: ubuntu-latest
+    outputs: { env: "${{ steps.config.outputs.env }}" }
+    steps:
+      - id: config
+        env: { WORKFLOW_ENV: "${{ toJSON(env) }}" }
+        run: echo "env=$(jq -c . <<< "${WORKFLOW_ENV}")" >> "$GITHUB_OUTPUT"
+  frontend:
+    needs: config
+    if: ${{ fromJSON(needs.config.outputs.env).FE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+          check-latest: true
+          cache: yarn
+          cache-dependency-path: ${{ env.FE_DIR }}/yarn.lock
+      - run: npm i -g corepack && corepack enable --install-directory $(npm prefix -g)/bin && corepack prepare yarn@4.13 --activate
+      - name: build
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          set -eux -o pipefail
+          (
+            cd ${FE_DIR}
+            yarn install --immutable
+            yarn run build
+          )
+          cp -r ${FE_DIR}/dist ${FE_TARGET}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: ${{ env.FE_TARGET }}
+  frontend_test:
+    needs: config
+    if: ${{ fromJSON(needs.config.outputs.env).FE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+          check-latest: true
+          cache: yarn
+          cache-dependency-path: ${{ env.FE_DIR }}/yarn.lock
+      - run: npm i -g corepack && corepack enable --install-directory $(npm prefix -g)/bin && corepack prepare yarn@4.13 --activate
+      - run: yarn install --immutable
+        env: { NODE_AUTH_TOKEN: "${{ secrets.DEPLOY_TOKEN }}" }
+        working-directory: "${{ env.FE_DIR }}"
+      - run: yarn test
+        working-directory: "${{ env.FE_DIR }}"
+  build:
+    needs: [config, frontend]
+    if: always() && (needs.frontend.result == 'success' || needs.frontend.result == 'skipped')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: [amd64, arm64]
+    env:
+      GOOS: "${{ matrix.goos }}"
+      GOARCH: "${{ matrix.goarch }}"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: ./.github/actions/go-setup
+        with:
+          sub_project: "${{ env.APP_DIR }}"
+          cgo_enabled: true
+          go_os: "${{ env.GOOS }}"
+          go_arch: "${{ env.GOARCH }}"
+      - uses: actions/download-artifact@v8
+        if: ${{ fromJSON(needs.config.outputs.env).FE_ENABLED == 'true' }}
+        with:
+          name: dist
+          path: ${{ env.FE_TARGET }}
+      - name: build
+        run: |
+          set -eux -o pipefail
+          case ${GOARCH} in
+          amd64)   export CC=x86_64-linux-gnu-gcc;;
+          arm64)   export CC=aarch64-linux-gnu-gcc;;
+          arm)     export CC=arm-linux-gnueabihf-gcc;;
+          riscv64) export CC=riscv64-linux-gnu-gcc;;
+          esac
+          go build -v -o ${APP}_${GOOS}_${GOARCH} -tags netgo,osusergo -ldflags '-linkmode external -extldflags -static' ${APP_PKG}
+      - name: checksums
+        run: |
+          set -eux -o pipefail
+          sha256sum ${APP}_${GOOS}_${GOARCH} > checksum_sha256_${GOOS}_${GOARCH}.txt
+          sha512sum ${APP}_${GOOS}_${GOARCH} > checksum_sha512_${GOOS}_${GOARCH}.txt
+      - name: zip
+        run: |
+          set -eux -o pipefail
+          zip ${APP}_${GOOS}_${GOARCH}.zip \
+            ${APP}_${GOOS}_${GOARCH} \
+            checksum_sha256_${GOOS}_${GOARCH}.txt \
+            checksum_sha512_${GOOS}_${GOARCH}.txt \
+            ;
+      - name: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.APP }}_${{ env.GOOS }}_${{ env.GOARCH }}.zip
+          path: ${{ env.APP }}_${{ env.GOOS }}_${{ env.GOARCH }}.zip
+          archive: 'false'
+  test:
+    needs: [config, frontend]
+    if: always() && (needs.frontend.result == 'success' || needs.frontend.result == 'skipped')
+    runs-on: ubuntu-latest
+    env: { GOOS : "linux", GOARCH : "amd64" }
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: ./.github/actions/go-setup
+        with:
+          sub_project: "${{ env.APP_DIR }}"
+          go_os: "${{ env.GOOS }}"
+          go_arch: "${{ env.GOARCH }}"
+          cache_name: 'test'
+      - uses: actions/download-artifact@v8
+        if: ${{ fromJSON(needs.config.outputs.env).FE_ENABLED == 'true' }}
+        with:
+          name: dist
+          path: ${{ env.FE_TARGET }}
+      - name: test
+        run: go test -v ./...
+  verify:
+    needs: build
+    if: (!cancelled() && (needs.build.result == 'success'))
+    runs-on: ubuntu-latest
+    env: { GOOS : "linux", GOARCH : "amd64" }
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: ./.github/actions/go-setup
+        with:
+          sub_project: "${{ env.APP_DIR }}"
+          go_os: "${{ env.GOOS }}"
+          go_arch: "${{ env.GOARCH }}"
+      - run: go mod verify
+  go_sec:
+    needs: build
+    if: (!cancelled() && (needs.build.result == 'success'))
+    runs-on: ubuntu-latest
+    env: { GOOS : "linux", GOARCH : "amd64" }
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: ./.github/actions/go-setup
+        with:
+          sub_project: "${{ env.APP_DIR }}"
+          go_os: "${{ env.GOOS }}"
+          go_arch: "${{ env.GOARCH }}"
+      # - run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+      - env:
+          GITHUB_TOKEN: "${{ github.token }}"
+        run: |
+          curl -fSsL --retry 5 --retry-all-errors $(
+            curl -fSsL https://api.github.com/repos/securego/gosec/releases/latest \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              | jq '.assets[] | select(.name | endswith("_linux_amd64.tar.gz")) | .browser_download_url' -r) --output gosec.tar.gz
+          sudo tar -C /usr/local/bin/ -xf gosec.tar.gz gosec
+          sudo chmod +x /usr/local/bin/gosec
+          gosec --version
+      - name: gosec scan
+        id: scan
+        run: |
+          set -eux -o pipefail
+          gosec ./... > gosec_output.txt || echo "gosec scan failed"
+          issues=$(cat gosec_output.txt | grep  "Issues" |  awk -F ': ' '{print $2}' || { echo "gosec 'grep Issues' failed" 1>&2; echo '-1'; })
+          echo "no.of issues is $issues"
+          echo "issues=$issues" >> "${GITHUB_OUTPUT}"
+      - name: Build gosec comment
+        if: (!cancelled()) && github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          {
+            echo '<!-- gosec-results -->'
+            echo '## GoSec results'
+            echo 'from [securego/gosec](https://github.com/securego/gosec)'
+            echo
+            if [[ "${{ steps.scan.outputs.issues }}" != "0" ]]; then
+              echo '### gosec ❌ - ${{ steps.scan.outputs.issues }} issues'
+              echo -e '<details><summary>raw output</summary>\n'
+              echo '```'
+              cat gosec_output.txt
+              echo '```'
+              echo -e '\n</details>'
+            else
+              echo '### gosec ✅'
+              echo 'No issues found.'
+            fi
+          } > security-comment.md
+      - name: Find gosec comment
+        if: (!cancelled()) && github.event_name == 'pull_request'
+        uses: peter-evans/find-comment@v3
+        id: find_comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: github-actions[bot]
+          body-includes: "<!-- gosec-results -->"
+      - name: Post comment
+        if: (!cancelled()) && github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: security-comment.md
+          edit-mode: replace
+  go_vuln_check:
+    needs: build
+    if: (!cancelled() && (needs.build.result == 'success'))
+    runs-on: ubuntu-latest
+    env: { GOOS : "linux", GOARCH : "amd64" }
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: ./.github/actions/go-setup
+        with:
+          sub_project: "${{ env.APP_DIR }}"
+          go_os: "${{ env.GOOS }}"
+          go_arch: "${{ env.GOARCH }}"
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      # slow: it re-installs go
+      # - uses: golang/govulncheck-action@v1
+      #   with:
+      #     output-file: 'govulncheck_output.txt'
+      - name: govulncheck scan
+        id: scan
+        run: |
+          set -eux -o pipefail
+          govulncheck ./... 2>&1 | tee govulncheck_output.txt || echo 'govulncheck failed'
+          if grep -q 'No vulnerabilities found' govulncheck_output.txt
+          then
+            vuln=0
+          else
+            vuln=$(cat govulncheck_output.txt | grep -m1 '^Your code is affected by' | awk ' { print $6 } ' || echo -1)
+          fi
+          echo "no.of vuln is $vuln"
+          echo "issues=$vuln" >> "${GITHUB_OUTPUT}"
+      - name: Build govulncheck comment
+        if: (!cancelled()) && github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          {
+            echo '<!-- govulncheck-results -->'
+            echo '## GoVulnCheck results'
+            echo 'from [securego/govulncheck](https://github.com/securego/govulncheck)'
+            echo
+            if [[ "${{ steps.scan.outputs.issues }}" != "0" ]]; then
+              echo '### govulncheck ❌ - ${{ steps.scan.outputs.issues }} issues'
+              echo -e '<details><summary>raw output</summary>\n'
+              echo '```'
+              cat govulncheck_output.txt
+              echo '```'
+              echo -e '\n</details>'
+            else
+              echo '### govulncheck ✅'
+              echo 'No issues found.'
+            fi
+          } > security-comment.md
+      - name: Find govulncheck comment
+        if: (!cancelled()) && github.event_name == 'pull_request'
+        uses: peter-evans/find-comment@v3
+        id: find_comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: github-actions[bot]
+          body-includes: "<!-- govulncheck-results -->"
+      - name: Post comment
+        if: (!cancelled()) && github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: security-comment.md
+          edit-mode: replace
+  golangci:
+    name: lint
+    needs: build
+    if: (!cancelled() && (needs.build.result == 'success'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/go-setup
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+        continue-on-error: true
+  sbom:
+    needs: build
+    if: (!cancelled() && (needs.build.result == 'success'))
+    runs-on: ubuntu-latest
+    env: { GOOS : "linux", GOARCH : "amd64" }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.APP }}_${{ env.GOOS }}_${{ env.GOARCH }}.zip
+      - run: file ${{ env.APP }}_${{ env.GOOS }}_${{ env.GOARCH }}
+      - name: install syft
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+      - name: run syft
+        run: syft dir:. -o spdx-json > sbom.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: syft-sbom
+          path: sbom.json
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_version: "${{ steps.version_check.outputs.check_txt_contents }}"
+      version: "${{ steps.version_check.outputs.version_value }}"
+      previous_version: "${{ steps.version_check.outputs.previous_version_value }}"
+    steps:
+      - uses: actions/checkout@v7
+      - run: git fetch --tags && git tag | head -n 1
+      - id: version_check
+        run: |
+          ./.github/version_check.sh
+          check_txt_contents=$(cat check.txt)
+          echo "Version is $check_txt_contents"
+          echo "check_txt_contents=${check_txt_contents}" >> "${GITHUB_OUTPUT}"
+          version_value="$(cat version/version.go | grep 'const Version' | awk '{print $NF}' | tr -d '"')"
+          echo "version_value=${version_value}" >> "${GITHUB_OUTPUT}"
+          previous_version_value=$(git describe --tags $(git rev-list --tags --max-count=1) | tr -d 'v')
+          echo "previous_version_value=${previous_version_value}" >> "${GITHUB_OUTPUT}"
+      - name: debug
+        env:
+          TAG_VERSION: "${{ steps.version_check.outputs.check_txt_contents }}"
+          VERSION: "${{ steps.version_check.outputs.version_value }}"
+          PREVIOUS_VERSION: "${{ steps.version_check.outputs.previous_version_value }}"
+        run: echo "version is ${VERSION} (previous = ${PREVIOUS_VERSION}) and TAG_VERSION is ${TAG_VERSION}"
+      - name: same version error message
+        if: steps.version_check.outputs.check_txt_contents == '1'
+        run: |
+          echo "::warning::version is same when compared to previous version please increment the release version for further release process"
+
+
+  image:
+    needs: [build, version]
+    if: (!cancelled() && (needs.build.result == 'success') && (needs.version.result == 'success'))
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: [amd64, arm64]
+    env:
+      GOOS: "${{ matrix.goos }}"
+      GOARCH: "${{ matrix.goarch }}"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.APP }}_${{ env.GOOS }}_${{ env.GOARCH }}.zip
+      - uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: temurin
+      - run: |
+          wget "https://github.com/GoogleContainerTools/jib/releases/download/v${JIB_VERSION}-cli/jib-jre-${JIB_VERSION}.zip"
+          unzip "./jib-jre-${JIB_VERSION}.zip"
+          sudo ln -fs "$PWD/jib-${JIB_VERSION}/bin/jib" /usr/bin
+          jib --version
+      - env:
+          VERSION: ${{ needs.version.outputs.VERSION }}
+        run: |
+          set -eux -o pipefail
+          BINARY=${APP}_${GOOS}_${GOARCH}
+          cd ${APP_DIR}
+          # find .
+          # file ${BINARY}
+          # https://github.com/GoogleContainerTools/jib/blob/master/jib-cli/README.md
+          jib build \
+            --build-file jib.yaml \
+            --parameter arch=${GOARCH} \
+            --parameter file=${BINARY} \
+            --target ghcr.io/americanbinary/${APP}:v${VERSION}-${GOARCH} \
+            --from-username "AmericanBinaryDevSecOps" \
+            --from-password "${{ secrets.DEPLOY_TOKEN }}" \
+            --to-username "${{ github.actor }}" \
+            --to-password "${{ secrets.GITHUB_TOKEN }}" \
+          ;
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build, version]
+    if: >
+      (!cancelled() && (needs.build.result == 'success') && (needs.version.result == 'success'))
+      &&
+      needs.version.outputs.tag_version != '1' && github.event_name == 'push' && github.ref_name == 'master'
+    env:
+      TAG_VERSION: "${{ needs.version.outputs.tag_version }}"
+      VERSION: "${{ needs.version.outputs.version }}"
+      PREVIOUS_VERSION: "${{ needs.version.outputs.previous_version }}"
+    steps:
+      - run: echo "version is ${VERSION} (previous = ${PREVIOUS_VERSION}) and TAG_VERSION is ${TAG_VERSION}"
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: '0'
+      - uses: actions/download-artifact@v8
+        with:
+          path: ./
+      - name: debug
+        run: find .
+      - name: Delete old Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "v${VERSION}" --cleanup-tag --yes || true
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }}
+          generate_release_notes: true
+          previous_tag: v${{ env.PREVIOUS_VERSION }}
+          files: |
+            ${{ env.APP }}_*
+            *.zip
+      - name: Check for commits between tags
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eux -o pipefail
+          echo "gh api step"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            /repos/AmericanBinary/${GITHUB_REPOSITORY#*/}/compare/v${PREVIOUS_VERSION}...v${VERSION} \
+            | tee gh-api
+          echo "jq total_commits step"
+          cat gh-api | jq -r .total_commits > gh-api-total-commits
+          if [[ $(cat gh-api-total-commits) == "0" ]]
+          then
+            echo "NO COMMITS FOUND"
+            echo "NO_COMMITS=1" >> "${GITHUB_ENV}"
+          fi
+      - name: Check out changelog branch
+        if: env.NO_COMMITS != '1'
+        run: |
+          set -eux -o pipefail
+          git fetch origin '+refs/heads/changelog:refs/remotes/origin/changelog' || true
+          if git rev-parse --verify --quiet origin/changelog; then
+            git checkout -B changelog origin/changelog
+          else
+            git checkout -b changelog
+          fi
+      - name: Update CHANGELOG
+        id: changelog
+        if: env.NO_COMMITS != '1'
+        uses: requarks/changelog-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: v${{ env.VERSION }}
+          includeInvalidCommits: true
+          excludeTypes: style
+      - name: Commit CHANGELOG.md
+        if: env.NO_COMMITS != '1'
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          branch: changelog
+          skip_fetch: true
+          skip_checkout: true
+          commit_message: "docs: update CHANGELOG.md for ${{ github.ref_name }} [skip ci]"
+          file_pattern: CHANGELOG.md
+
+  release-image-ghcr:
+    runs-on: ubuntu-latest
+    needs: [image, version]
+    if: >
+      (!cancelled() && (needs.image.result == 'success') && (needs.version.result == 'success'))
+      &&
+      needs.version.outputs.tag_version != '1' && github.event_name == 'push' && github.ref_name == 'master'
+    steps:
+      - run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: release image to ghcr
+        env:
+          VERSION: ${{ needs.version.outputs.VERSION }}
+        run: |
+          set -eux -o pipefail
+          docker buildx imagetools create \
+            --tag ghcr.io/americanbinary/${APP}:v${VERSION} \
+            ghcr.io/americanbinary/${APP}:v${VERSION}-amd64 \
+            ghcr.io/americanbinary/${APP}:v${VERSION}-arm64 \
+            ;
+
+  release-image-ambit-registry:
+    runs-on: ubuntu-latest
+    needs: [image, version]
+    if: >
+      (!cancelled() && (needs.image.result == 'success') && (needs.version.result == 'success'))
+      &&
+      needs.version.outputs.tag_version != '1'
+    steps:
+      - name: determine target environment
+        env:
+          github_event_name: "${{ github.event_name }}"
+          github_ref_name: "${{ github.ref_name }}"
+        run: |
+          set -eux -o pipefail
+          if [[ ${github_event_name} == "push" && ${github_ref_name} == "master" ]]
+          then
+            echo "target_environment=prod" >> "${GITHUB_ENV}"
+            echo "target_repo=repo.edge.ambit.inc" >> "${GITHUB_ENV}"
+          else
+            echo "target_environment=dev" >> "${GITHUB_ENV}"
+            echo "target_repo=repo.dev.edge.ambit.inc" >> "${GITHUB_ENV}"
+          fi
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-region: 'us-east-1'
+          role-to-assume: 'arn:aws:iam::372108847118:role/${{ env.target_environment }}-image-reg-registry-push'
+      - run: |
+          set -eux -o pipefail
+          token=$(
+            curl -fSs -X POST "https://login.microsoftonline.com/3390a7ac-e80c-4cf8-a217-02099a3a22b7/oauth2/v2.0/token" \
+              -H 'Content-Type: application/x-www-form-urlencoded' \
+              --data-urlencode "client_id=$(aws ssm get-parameter --with-decryption --name /${target_environment}/image-reg-auth-gha/repo-app-client-id --output text --query Parameter.Value)" \
+              --data-urlencode "client_secret=$(aws ssm get-parameter --with-decryption --name /${target_environment}/image-reg-auth-gha/repo-app-client-secret --output text --query Parameter.Value)" \
+              --data-urlencode 'grant_type=client_credentials' \
+              --data-urlencode "scope=api://${target_environment}-repo-int-app/.default" \
+              | jq -r .access_token
+          )
+          echo "${token}" | docker login ${target_repo} -u Ambit --password-stdin
+      - run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: release image to registry
+        env:
+          VERSION: ${{ needs.version.outputs.VERSION }}
+        run: |
+          set -eux -o pipefail
+          docker buildx imagetools create \
+            --tag ${target_repo}/${APP}:latest \
+            --tag ${target_repo}/${APP}:v${VERSION} \
+            ghcr.io/americanbinary/${APP}:v${VERSION}-amd64 \
+            ghcr.io/americanbinary/${APP}:v${VERSION}-arm64 \
+            ;
