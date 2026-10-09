@@ -1,0 +1,73 @@
+name: "AB github-actions: go/setup"
+description: go/setup
+
+inputs:
+  sub_project: { description: 'folder' }
+  cache_name: { description: 'for caching', default: 'default' }
+  cgo_enabled: { description: 'true or false' }
+  go_os: { description: 'for caching' }
+  go_arch: { description: 'for caching' }
+  # faq: https://github.com/reactjs/react.dev/issues/3896
+  __secret_internals_do_not_use_or_you_will_be_fired: { description: 'go version', default: '1.27' }
+
+runs:
+  using: composite
+  steps:
+    - name: check for go.sum
+      id: go_sum_check
+      shell: python
+      # language=python
+      run: |
+        from pathlib import Path
+        from os import environ
+        
+        sub_project = Path("${{ inputs.sub_project }}".strip("/"))
+        if (sub_project / "go.sum").exists():
+            with Path(environ["GITHUB_OUTPUT"]).open("a") as go:
+                print("HAS_GO_SUM=1", file=go)
+                print(f"GO_SUM_FILE={(sub_project / "go.sum")}", file=go)
+        elif (sub_project / "go.mod").exists():
+            with Path(environ["GITHUB_OUTPUT"]).open("a") as go:
+                print("HAS_GO_SUM=1", file=go)
+                print(f"GO_SUM_FILE={(sub_project / "go.mod")}", file=go)
+        else:
+            raise Exception(f"no checksum file for go: go.sum or go.mod in dir: {sub_project}")
+
+    - name: add go vars to cache key
+      shell: bash
+      id: add_go_vars_to_cache_key
+      run: |
+        echo "${{ inputs.cache_name }} ${{ inputs.cgo_enabled }} ${{ inputs.go_os }} ${{ inputs.go_arch }}" > .cache.txt
+
+    - name: 'go with go.sum'
+      uses: actions/setup-go@v7
+      if: steps.go_sum_check.outputs.HAS_GO_SUM == '1'
+      with:
+        go-version: "${{ inputs.__secret_internals_do_not_use_or_you_will_be_fired }}"
+        check-latest: 'true'
+        cache-dependency-path: |
+          "${{ steps.go_sum_check.outputs.GO_SUM_FILE }}"
+          .cache.txt
+
+    - name: 'go without go.sum'
+      uses: actions/setup-go@v7
+      if: steps.go_sum_check.outputs.HAS_GO_SUM != '1'
+      with:
+        go-version: "${{ inputs.__secret_internals_do_not_use_or_you_will_be_fired }}"
+        check-latest: 'true'
+        cache-dependency-path: |
+          .cache.txt
+
+    - name: install compiler
+      if: inputs.cgo_enabled == 'true'
+      shell: bash
+      run: |
+        set -eux -o pipefail
+        sudo apt-get install -y $(
+          case ${{ inputs.go_arch }} in
+          amd64)   echo gcc-x86-64-linux-gnu;;
+          arm64)   echo gcc-aarch64-linux-gnu;;
+          arm)     echo gcc-arm-linux-gnueabihf;;
+          riscv64) echo gcc-riscv64-linux-gnu;;
+          esac
+        )
