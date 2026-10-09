@@ -122,7 +122,7 @@ jobs:
           arm)     export CC=arm-linux-gnueabihf-gcc;;
           riscv64) export CC=riscv64-linux-gnu-gcc;;
           esac
-          go build -v -o ${APP}_${GOOS}_${GOARCH} -tags netgo,osusergo -ldflags '-linkmode external -extldflags -static' ./
+          go build -v -o ${APP}_${GOOS}_${GOARCH} -tags netgo,osusergo -ldflags '-linkmode external -extldflags -static' ${APP_PKG}
       - name: checksums
         run: |
           set -eux -o pipefail
