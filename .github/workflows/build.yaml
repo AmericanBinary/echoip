@@ -10,6 +10,9 @@ env:
   APP: echoip
   APP_PKG: ./cmd/echoip
   APP_DIR: ./
+  FE_ENABLED: false
+  FE_DIR: ./echoipweb
+  FE_TARGET: ./public
   AWS_ROLE_SUFFIX: repo-ecr-push
   AWS_ECS_SERVICE_NAME: repo-auth
 
@@ -18,8 +21,8 @@ on:
     branches: &branches
       - master
     # paths: &paths
-    #   - .github/workflows/build.yaml
-    #   - **
+    #   - .github/workflows/docker-registry-auth-docker-build.yaml
+    #   - tools/images/docker-registry-auth/**
     types: [ opened, synchronize, reopened ]
   push:
     branches: *branches
@@ -32,7 +35,62 @@ permissions:
   pull-requests: write
 
 jobs:
+  config:
+    runs-on: ubuntu-latest
+    outputs: { env: "${{ steps.config.outputs.env }}" }
+    steps:
+      - id: config
+        env: { WORKFLOW_ENV: "${{ toJSON(env) }}" }
+        run: echo "env=$(jq -c . <<< "${WORKFLOW_ENV}")" >> "$GITHUB_OUTPUT"
+  frontend:
+    needs: config
+    if: ${{ fromJSON(needs.config.outputs.env).FE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+          check-latest: true
+          cache: yarn
+          cache-dependency-path: ${{ env.FE_DIR }}/yarn.lock
+      - run: npm i -g corepack && corepack enable --install-directory $(npm prefix -g)/bin && corepack prepare yarn@4.13 --activate
+      - name: build
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          set -eux -o pipefail
+          (
+            cd ${FE_DIR}
+            yarn install --immutable
+            yarn run build
+          )
+          cp -r ${FE_DIR}/dist ${FE_TARGET}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: ${{ env.FE_TARGET }}
+  frontend_test:
+    needs: config
+    if: ${{ fromJSON(needs.config.outputs.env).FE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+          check-latest: true
+          cache: yarn
+          cache-dependency-path: ${{ env.FE_DIR }}/yarn.lock
+      - run: npm i -g corepack && corepack enable --install-directory $(npm prefix -g)/bin && corepack prepare yarn@4.13 --activate
+      - run: yarn install --immutable
+        env: { NODE_AUTH_TOKEN: "${{ secrets.DEPLOY_TOKEN }}" }
+        working-directory: "${{ env.FE_DIR }}"
+      - run: yarn test
+        working-directory: "${{ env.FE_DIR }}"
   build:
+    needs: [config, frontend]
+    if: always() && (needs.frontend.result == 'success' || needs.frontend.result == 'skipped')
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -44,12 +102,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Go
-        uses: ./.github/actions/go-setup
+        uses: AmericanBinary/github-actions/actions/go/setup@develop
         with:
           sub_project: "${{ env.APP_DIR }}"
           cgo_enabled: true
           go_os: "${{ env.GOOS }}"
           go_arch: "${{ env.GOARCH }}"
+          fg_token: "${{ secrets.FINE_GRAINED_DEPLOY_TOKEN }}"
+      - uses: actions/download-artifact@v8
+        if: ${{ fromJSON(needs.config.outputs.env).FE_ENABLED == 'true' }}
+        with:
+          name: dist
+          path: ${{ env.FE_TARGET }}
       - name: build
         run: |
           set -eux -o pipefail
@@ -59,7 +123,7 @@ jobs:
           arm)     export CC=arm-linux-gnueabihf-gcc;;
           riscv64) export CC=riscv64-linux-gnu-gcc;;
           esac
-          go build -v -o ${APP}_${GOOS}_${GOARCH} -tags netgo,osusergo -ldflags '-linkmode external -extldflags -static' ${APP_PKG}
+          go build -v -o ${APP}_${GOOS}_${GOARCH} -tags netgo,osusergo -ldflags '-linkmode external -extldflags -static' ./
       - name: checksums
         run: |
           set -eux -o pipefail
@@ -80,44 +144,56 @@ jobs:
           path: ${{ env.APP }}_${{ env.GOOS }}_${{ env.GOARCH }}.zip
           archive: 'false'
   test:
+    needs: [config, frontend]
+    if: always() && (needs.frontend.result == 'success' || needs.frontend.result == 'skipped')
     runs-on: ubuntu-latest
     env: { GOOS : "linux", GOARCH : "amd64" }
     steps:
       - uses: actions/checkout@v7
       - name: Set up Go
-        uses: ./.github/actions/go-setup
+        uses: AmericanBinary/github-actions/actions/go/just-setup@develop
         with:
           sub_project: "${{ env.APP_DIR }}"
           go_os: "${{ env.GOOS }}"
           go_arch: "${{ env.GOARCH }}"
+          fg_token: "${{ secrets.FINE_GRAINED_DEPLOY_TOKEN }}"
           cache_name: 'test'
+      - uses: actions/download-artifact@v8
+        if: ${{ fromJSON(needs.config.outputs.env).FE_ENABLED == 'true' }}
+        with:
+          name: dist
+          path: ${{ env.FE_TARGET }}
       - name: test
         run: go test -v ./...
   verify:
     needs: build
+    if: (!cancelled() && (needs.build.result == 'success'))
     runs-on: ubuntu-latest
     env: { GOOS : "linux", GOARCH : "amd64" }
     steps:
       - uses: actions/checkout@v7
       - name: Set up Go
-        uses: ./.github/actions/go-setup
+        uses: AmericanBinary/github-actions/actions/go/just-setup@develop
         with:
           sub_project: "${{ env.APP_DIR }}"
           go_os: "${{ env.GOOS }}"
           go_arch: "${{ env.GOARCH }}"
+          fg_token: "${{ secrets.FINE_GRAINED_DEPLOY_TOKEN }}"
       - run: go mod verify
   go_sec:
     needs: build
+    if: (!cancelled() && (needs.build.result == 'success'))
     runs-on: ubuntu-latest
     env: { GOOS : "linux", GOARCH : "amd64" }
     steps:
       - uses: actions/checkout@v7
       - name: Set up Go
-        uses: ./.github/actions/go-setup
+        uses: AmericanBinary/github-actions/actions/go/just-setup@develop
         with:
           sub_project: "${{ env.APP_DIR }}"
           go_os: "${{ env.GOOS }}"
           go_arch: "${{ env.GOARCH }}"
+          fg_token: "${{ secrets.FINE_GRAINED_DEPLOY_TOKEN }}"
       # - run: go install github.com/securego/gosec/v2/cmd/gosec@latest
       - env:
           GITHUB_TOKEN: "${{ github.token }}"
@@ -176,16 +252,18 @@ jobs:
           edit-mode: replace
   go_vuln_check:
     needs: build
+    if: (!cancelled() && (needs.build.result == 'success'))
     runs-on: ubuntu-latest
     env: { GOOS : "linux", GOARCH : "amd64" }
     steps:
       - uses: actions/checkout@v7
       - name: Set up Go
-        uses: ./.github/actions/go-setup
+        uses: AmericanBinary/github-actions/actions/go/just-setup@develop
         with:
           sub_project: "${{ env.APP_DIR }}"
           go_os: "${{ env.GOOS }}"
           go_arch: "${{ env.GOARCH }}"
+          fg_token: "${{ secrets.FINE_GRAINED_DEPLOY_TOKEN }}"
       - run: go install golang.org/x/vuln/cmd/govulncheck@latest
       # slow: it re-installs go
       # - uses: golang/govulncheck-action@v1
@@ -244,6 +322,7 @@ jobs:
   golangci:
     name: lint
     needs: build
+    if: (!cancelled() && (needs.build.result == 'success'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -251,7 +330,9 @@ jobs:
       checks: write
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/go-setup
+      - uses: AmericanBinary/github-actions/actions/go/just-setup@develop
+        with:
+          fg_token: "${{ secrets.FINE_GRAINED_DEPLOY_TOKEN }}"
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
@@ -259,6 +340,7 @@ jobs:
         continue-on-error: true
   sbom:
     needs: build
+    if: (!cancelled() && (needs.build.result == 'success'))
     runs-on: ubuntu-latest
     env: { GOOS : "linux", GOARCH : "amd64" }
     steps:
@@ -308,6 +390,7 @@ jobs:
 
   image:
     needs: [build, version]
+    if: (!cancelled() && (needs.build.result == 'success') && (needs.version.result == 'success'))
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -353,7 +436,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     needs: [build, version]
-    if: needs.version.outputs.tag_version != '1' && github.event_name == 'push' && github.ref_name == 'master'
+    if: >
+      (!cancelled() && (needs.build.result == 'success') && (needs.version.result == 'success'))
+      &&
+      needs.version.outputs.tag_version != '1' && github.event_name == 'push' && github.ref_name == 'master'
     env:
       TAG_VERSION: "${{ needs.version.outputs.tag_version }}"
       VERSION: "${{ needs.version.outputs.version }}"
@@ -391,7 +477,7 @@ jobs:
           gh api \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2026-03-10" \
-            /repos/AmericanBinary/AmbitClientBackendService/compare/v${PREVIOUS_VERSION}...v${VERSION} \
+            /repos/AmericanBinary/${GITHUB_REPOSITORY#*/}/compare/v${PREVIOUS_VERSION}...v${VERSION} \
             | tee gh-api
           echo "jq total_commits step"
           cat gh-api | jq -r .total_commits > gh-api-total-commits
@@ -399,6 +485,16 @@ jobs:
           then
             echo "NO COMMITS FOUND"
             echo "NO_COMMITS=1" >> "${GITHUB_ENV}"
+          fi
+      - name: Check out changelog branch
+        if: env.NO_COMMITS != '1'
+        run: |
+          set -eux -o pipefail
+          git fetch origin '+refs/heads/changelog:refs/remotes/origin/changelog' || true
+          if git rev-parse --verify --quiet origin/changelog; then
+            git checkout -B changelog origin/changelog
+          else
+            git checkout -b changelog
           fi
       - name: Update CHANGELOG
         id: changelog
@@ -414,13 +510,18 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v7
         with:
           branch: changelog
+          skip_fetch: true
+          skip_checkout: true
           commit_message: "docs: update CHANGELOG.md for ${{ github.ref_name }} [skip ci]"
           file_pattern: CHANGELOG.md
 
   release-image-ghcr:
     runs-on: ubuntu-latest
     needs: [image, version]
-    if: needs.version.outputs.tag_version != '1' && github.event_name == 'push' && github.ref_name == 'master'
+    if: >
+      (!cancelled() && (needs.image.result == 'success') && (needs.version.result == 'success'))
+      &&
+      needs.version.outputs.tag_version != '1' && github.event_name == 'push' && github.ref_name == 'master'
     steps:
       - run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: release image to ghcr
@@ -437,7 +538,10 @@ jobs:
   release-image-ambit-registry:
     runs-on: ubuntu-latest
     needs: [image, version]
-    if: needs.version.outputs.tag_version != '1'
+    if: >
+      (!cancelled() && (needs.image.result == 'success') && (needs.version.result == 'success'))
+      &&
+      needs.version.outputs.tag_version != '1'
     steps:
       - name: determine target environment
         env:
@@ -462,7 +566,7 @@ jobs:
           token=$(
             curl -fSs -X POST "https://login.microsoftonline.com/3390a7ac-e80c-4cf8-a217-02099a3a22b7/oauth2/v2.0/token" \
               -H 'Content-Type: application/x-www-form-urlencoded' \
-              --data-urlencode "client_id=8dd3d59c-6996-4134-beee-2f63dd62c43e" \
+              --data-urlencode "client_id=$(aws ssm get-parameter --with-decryption --name /${target_environment}/image-reg-auth-gha/repo-app-client-id --output text --query Parameter.Value)" \
               --data-urlencode "client_secret=$(aws ssm get-parameter --with-decryption --name /${target_environment}/image-reg-auth-gha/repo-app-client-secret --output text --query Parameter.Value)" \
               --data-urlencode 'grant_type=client_credentials' \
               --data-urlencode "scope=api://${target_environment}-repo-int-app/.default" \

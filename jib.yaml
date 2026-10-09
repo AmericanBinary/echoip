@@ -12,6 +12,10 @@ format: Docker
 
 entrypoint:
   - /main
+  - "-p"
+  - "-r"
+  - "-H"
+  - "X-Forwarded-For"
 
 layers:
   entries:
@@ -21,3 +25,5 @@ layers:
           dest: /main
           properties:
             filePermissions: 755
+        - src: html
+          dest: /html
