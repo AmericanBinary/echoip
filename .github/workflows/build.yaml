@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Go
-        uses: ./.github/actions/go-setup/action.yml
+        uses: ./.github/actions/go-setup
         with:
           sub_project: "${{ env.APP_DIR }}"
           cgo_enabled: true
@@ -85,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Go
-        uses: ./.github/actions/go-setup/action.yml
+        uses: ./.github/actions/go-setup
         with:
           sub_project: "${{ env.APP_DIR }}"
           go_os: "${{ env.GOOS }}"
@@ -100,7 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Go
-        uses: ./.github/actions/go-setup/action.yml
+        uses: ./.github/actions/go-setup
         with:
           sub_project: "${{ env.APP_DIR }}"
           go_os: "${{ env.GOOS }}"
@@ -113,7 +113,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Go
-        uses: ./.github/actions/go-setup/action.yml
+        uses: ./.github/actions/go-setup
         with:
           sub_project: "${{ env.APP_DIR }}"
           go_os: "${{ env.GOOS }}"
@@ -181,7 +181,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Go
-        uses: ./.github/actions/go-setup/action.yml
+        uses: ./.github/actions/go-setup
         with:
           sub_project: "${{ env.APP_DIR }}"
           go_os: "${{ env.GOOS }}"
@@ -251,7 +251,7 @@ jobs:
       checks: write
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/go-setup/action.yml
+      - uses: ./.github/actions/go-setup
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
