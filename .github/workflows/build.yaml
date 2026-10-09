@@ -8,7 +8,7 @@ env:
   JIB_VERSION: '0.13.0'
 
   APP: echoip
-  APP_PKG: ./
+  APP_PKG: ./cmd/echoip
   APP_DIR: ./
   AWS_ROLE_SUFFIX: repo-ecr-push
   AWS_ECS_SERVICE_NAME: repo-auth
@@ -59,7 +59,7 @@ jobs:
           arm)     export CC=arm-linux-gnueabihf-gcc;;
           riscv64) export CC=riscv64-linux-gnu-gcc;;
           esac
-          go build -v -o ${APP}_${GOOS}_${GOARCH} -tags netgo,osusergo -ldflags '-linkmode external -extldflags -static' ./
+          go build -v -o ${APP}_${GOOS}_${GOARCH} -tags netgo,osusergo -ldflags '-linkmode external -extldflags -static' ${APP_PKG}
       - name: checksums
         run: |
           set -eux -o pipefail
