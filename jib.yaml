@@ -10,8 +10,12 @@ from:
 creationTime: 1970-01-01T00:00:01Z
 format: Docker
 
+# Same layout as the Dockerfile: the helm charts run /opt/echoip/echoip, and the
+# default template dir ("html") is relative to the working directory.
+workingDirectory: /opt/echoip
+
 entrypoint:
-  - /main
+  - /opt/echoip/echoip
   - "-p"
   - "-r"
   - "-H"
@@ -22,8 +26,8 @@ layers:
     - name: app
       files:
         - src: ${file}
-          dest: /main
+          dest: /opt/echoip/echoip
           properties:
             filePermissions: 755
         - src: html
-          dest: /html
+          dest: /opt/echoip/html
