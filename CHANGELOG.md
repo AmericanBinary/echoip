@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [v1.0.6] - 2026-10-26
+### :bug: Bug Fixes
+- [`7166a67`](https://github.com/AmericanBinary/echoip/commit/7166a67aa475f49235a6c9372b2d308ca8be5f64) - image layout matches the Dockerfile and the helm charts (1.0.6) *(commit by [@Sophrinix](https://github.com/Sophrinix))*
+
+### :flying_saucer: Other Changes
+- [`e23298d`](https://github.com/AmericanBinary/echoip/commit/e23298db399b76c31209bf6aae86e3a0bed189f4) - Merge pull request [#22](https://github.com/AmericanBinary/echoip/pull/22) from AmericanBinary/fix/image-layout-matches-chart
+
+fix: image layout matches the Dockerfile and the helm charts (1.0.6) *(commit by [@amcelroyambit](https://github.com/amcelroyambit))*
+
+
 ## [v1.0.5] - 2026-10-09
 ### :bug: Bug Fixes
 - [`1ea3eb7`](https://github.com/AmericanBinary/echoip/commit/1ea3eb7d7919fdea49b2352cf406bd4ce2f75809) - **ci**: repair release registry push and changelog commit *(commit by [@Sophrinix](https://github.com/Sophrinix))*
@@ -25,3 +35,4 @@ fix(ci): registry manifest push + changelog branch *(commit by [@amcelroyambit](
 fix: unify cicd for echoip *(commit by [@Sophrinix](https://github.com/Sophrinix))*
 
 [v1.0.5]: https://github.com/AmericanBinary/echoip/compare/v1.0.4...v1.0.5
+[v1.0.6]: https://github.com/AmericanBinary/echoip/compare/v1.0.5...v1.0.6
