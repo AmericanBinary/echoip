@@ -1,5 +1,5 @@
 # PDT image: a manual build of one branch as v<version>-pdt.<N> with the
-# GeoIP databases baked in, for the ab-acc PDT builds (ACC
+# GeoIP database baked in, for the ab-acc PDT builds (ACC
 # ab-packages/ab-acc/pdt-values.yaml pins it as stack.echoip.tag).
 # Modelled on administrator-panel .github/workflows/pdt-image.yaml.
 #
@@ -20,22 +20,12 @@
 #   /opt/echoip/data/*.mmdb and the entrypoint pdt/entrypoint.sh, which
 #   passes -f/-c/-a for the databases present.
 #
-# GeoIP databases (job geoip). The same MaxMind GeoLite2 data the Ambit
-# Client apps ship, from one of:
-#   1. secret GEOIP_LICENSE_KEY (repository or organization; the variable
-#      name of this repository's Makefile) when set: GeoLite2-Country and
-#      GeoLite2-City downloaded from download.maxmind.com at build time
-#      (current data). The key is only read from the secret, never written.
-#   2. otherwise the GeoLite2-City.mmdb committed in the Ambit Client repos
-#      (AmbitClientLinux AmbitClient.UI/Assets/Db/GeoLite2-City.mmdb, the same
-#      blob in AmbitClientDesktopWindows, AmbitClientApple and
-#      AmbitClientAndroid), read at the pinned git blob below with the
-#      DEPLOY_TOKEN secret from the first of those repos it can read, and
-#      checked against that blob id. A City database
-#      also answers country lookups, so it is passed as -f and -c.
-# MaxMind's LICENSE.txt and COPYRIGHT.txt (the clients' installer copies) are
-# shipped next to the databases in /opt/echoip/data. Use is governed by the
-# GeoLite2 End User License Agreement.
+# GeoIP database (job geoip): DB-IP IP to Country Lite (CC BY 4.0, MaxMind DB
+# format) from GEOIP_URL, checked against GEOIP_SHA256 (of the .mmdb) and by a
+# lookup of 8.8.8.8 (US); baked in as /opt/echoip/data/country.mmdb with
+# LICENSE.txt (the DB-IP attribution and license) and SOURCE.txt. The same
+# single input as ACC .github/workflows/pdt.yaml: a newer month is its URL and
+# the sha256 of its .mmdb.
 #
 # Dispatching. GitHub's rule (docs.github.com, "Events that trigger
 # workflows", workflow_dispatch): the "Run workflow" button is shown only if
@@ -61,20 +51,9 @@ env:
   APP_PKG: ./cmd/echoip
   # https://github.com/GoogleContainerTools/jib/releases/tag/v0.13.0-cli
   JIB_VERSION: '0.13.0'
-  # the Ambit Client apps' GeoLite2-City.mmdb (source 2 above)
-  CLIENT_DB_REPOS: >-
-    AmericanBinary/AmbitClientLinux AmericanBinary/AmbitClientDesktopWindows
-    AmericanBinary/AmbitClientApple AmericanBinary/AmbitClientAndroid
-  CLIENT_DB_PATH: AmbitClient.UI/Assets/Db/GeoLite2-City.mmdb
-  CLIENT_DB_BLOB: 29480db2365f19214c236ef42b28458621a05fe5
-  # LICENSE.txt / COPYRIGHT.txt there (Linux, Windows); otherwise this text
-  CLIENT_DB_LICENSE_DIR: AmbitClientInstall/assets/maxmind
-  CLIENT_DB_LICENSE_TXT: >-
-    Use of this MaxMind product is governed by MaxMind's GeoLite2 End User License
-    Agreement, https://www.maxmind.com/en/geolite2/eula. Database and Contents
-    Copyright (c) 2024 MaxMind, Inc. This database incorporates GeoNames
-    [https://www.geonames.org] geographical data, which is made available under the
-    Creative Commons Attribution 4.0 License, https://creativecommons.org/licenses/by/4.0/.
+  # GeoIP database (see above)
+  GEOIP_URL: https://download.db-ip.com/free/dbip-country-lite-2026-11.mmdb.gz
+  GEOIP_SHA256: 145ce5dfb812d8de28547e6289bb5c5f8b3df2f1dea21d324d5b575e0431311f
 
 on:
   workflow_dispatch:
@@ -167,57 +146,24 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     steps:
-      - name: fetch the GeoIP databases
-        env:
-          GEOIP_LICENSE_KEY: ${{ secrets.GEOIP_LICENSE_KEY }}
-          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+      - name: fetch the GeoIP database (GEOIP_URL, sha256 and lookup checked)
         run: |
-          # xtrace is intentionally disabled: this step handles a license key and a token
           set -eu -o pipefail
-          set +x
           mkdir -p data
-          if [[ -n "${GEOIP_LICENSE_KEY}" ]]; then
-            for edition in GeoLite2-Country GeoLite2-City; do
-              curl -fsSL --retry 3 -m 300 -G "https://download.maxmind.com/app/geoip_download" \
-                --data-urlencode "edition_id=${edition}" \
-                --data-urlencode "license_key=${GEOIP_LICENSE_KEY}" \
-                --data-urlencode "suffix=tar.gz" -o "${edition}.tar.gz"
-              tar --wildcards --strip-components=1 -C data -xzf "${edition}.tar.gz" '*.mmdb' '*LICENSE.txt' '*COPYRIGHT.txt'
-            done
-            mv data/GeoLite2-Country.mmdb data/country.mmdb
-            mv data/GeoLite2-City.mmdb data/city.mmdb
-            echo "MaxMind GeoLite2-Country and GeoLite2-City from download.maxmind.com (GEOIP_LICENSE_KEY), $(date -u +%F)" > data/SOURCE.txt
-          else
-            if [[ -z "${DEPLOY_TOKEN}" ]]; then
-              echo "::error::neither GEOIP_LICENSE_KEY nor DEPLOY_TOKEN is available to this repository"; exit 1
-            fi
-            api() { curl -fsSL --retry 3 -m 300 -H "Authorization: Bearer ${DEPLOY_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
-            # the same blob is in every client repo: the first one DEPLOY_TOKEN can read
-            src=""
-            for repo in ${CLIENT_DB_REPOS}; do
-              if api -H "Accept: application/vnd.github.raw" -o data/city.mmdb \
-                  "https://api.github.com/repos/${repo}/git/blobs/${CLIENT_DB_BLOB}" 2>/dev/null; then
-                src="${repo}"; break
-              fi
-              echo "DEPLOY_TOKEN cannot read ${repo}"
-            done
-            if [[ -z "${src}" ]]; then
-              echo "::error::DEPLOY_TOKEN cannot read the GeoLite2-City.mmdb blob ${CLIENT_DB_BLOB} in ${CLIENT_DB_REPOS}: give it read access to one of them, or set the GEOIP_LICENSE_KEY secret"; exit 1
-            fi
-            got="$(git hash-object data/city.mmdb)"
-            if [[ "${got}" != "${CLIENT_DB_BLOB}" ]]; then
-              echo "::error::${src} blob is ${got}, expected ${CLIENT_DB_BLOB}"; exit 1
-            fi
-            for f in LICENSE.txt COPYRIGHT.txt; do
-              api -H "Accept: application/vnd.github.raw" -o "data/${f}" \
-                "https://api.github.com/repos/${src}/contents/${CLIENT_DB_LICENSE_DIR}/${f}" 2>/dev/null \
-                || printf '%s\n' "${CLIENT_DB_LICENSE_TXT}" > "data/${f}"
-            done
-            echo "MaxMind GeoLite2-City as shipped in the Ambit Client apps: ${src} (git blob ${CLIENT_DB_BLOB}, AmbitClientLinux ${CLIENT_DB_PATH})" > data/SOURCE.txt
-          fi
-          ls -l data
+          sudo apt-get install -y -qq mmdb-bin >/dev/null
+          curl -fsSL --retry 3 -m 600 -o download "${GEOIP_URL}"
+          case ${GEOIP_URL%%\?*} in
+            *.gz) gunzip -c download > data/country.mmdb ;;
+            *)    mv download data/country.mmdb ;;
+          esac
+          rm -f download
+          echo "${GEOIP_SHA256}  data/country.mmdb" | sha256sum -c -
+          cc=$(mmdblookup --file data/country.mmdb --ip 8.8.8.8 country iso_code | grep -oE '"[A-Z]{2}"' | tr -d '"')
+          [[ ${cc} == US ]] || { echo "::error::${GEOIP_URL} resolves 8.8.8.8 to '${cc}', not US"; exit 1; }
+          cp pdt/geoip-LICENSE.txt data/LICENSE.txt
+          echo "source ${GEOIP_URL} (downloaded $(date -u +%F)), sha256 ${GEOIP_SHA256}" > data/SOURCE.txt
           {
-            echo "GeoIP databases:"
+            echo "GeoIP database:"
             echo '```'
             ls -l data
             cat data/SOURCE.txt

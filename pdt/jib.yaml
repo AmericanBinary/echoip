@@ -38,7 +38,7 @@ layers:
           dest: /opt/echoip/entrypoint.sh
           properties:
             filePermissions: 755
-    # *.mmdb plus the MaxMind LICENSE.txt / COPYRIGHT.txt / SOURCE.txt
+    # country.mmdb (DB-IP IP to Country Lite) plus LICENSE.txt and SOURCE.txt
     - name: geoip-data
       files:
         - src: data
