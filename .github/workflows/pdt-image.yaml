@@ -28,9 +28,10 @@
 #      (current data). The key is only read from the secret, never written.
 #   2. otherwise the GeoLite2-City.mmdb committed in the Ambit Client repos
 #      (AmbitClientLinux AmbitClient.UI/Assets/Db/GeoLite2-City.mmdb, the same
-#      blob in AmbitClientApple, AmbitClientDesktopWindows and
+#      blob in AmbitClientDesktopWindows, AmbitClientApple and
 #      AmbitClientAndroid), read at the pinned git blob below with the
-#      DEPLOY_TOKEN secret and checked against that blob id. A City database
+#      DEPLOY_TOKEN secret from the first of those repos it can read, and
+#      checked against that blob id. A City database
 #      also answers country lookups, so it is passed as -f and -c.
 # MaxMind's LICENSE.txt and COPYRIGHT.txt (the clients' installer copies) are
 # shipped next to the databases in /opt/echoip/data. Use is governed by the
@@ -61,10 +62,19 @@ env:
   # https://github.com/GoogleContainerTools/jib/releases/tag/v0.13.0-cli
   JIB_VERSION: '0.13.0'
   # the Ambit Client apps' GeoLite2-City.mmdb (source 2 above)
-  CLIENT_DB_REPO: AmericanBinary/AmbitClientLinux
+  CLIENT_DB_REPOS: >-
+    AmericanBinary/AmbitClientLinux AmericanBinary/AmbitClientDesktopWindows
+    AmericanBinary/AmbitClientApple AmericanBinary/AmbitClientAndroid
   CLIENT_DB_PATH: AmbitClient.UI/Assets/Db/GeoLite2-City.mmdb
   CLIENT_DB_BLOB: 29480db2365f19214c236ef42b28458621a05fe5
+  # LICENSE.txt / COPYRIGHT.txt there (Linux, Windows); otherwise this text
   CLIENT_DB_LICENSE_DIR: AmbitClientInstall/assets/maxmind
+  CLIENT_DB_LICENSE_TXT: >-
+    Use of this MaxMind product is governed by MaxMind's GeoLite2 End User License
+    Agreement, https://www.maxmind.com/en/geolite2/eula. Database and Contents
+    Copyright (c) 2024 MaxMind, Inc. This database incorporates GeoNames
+    [https://www.geonames.org] geographical data, which is made available under the
+    Creative Commons Attribution 4.0 License, https://creativecommons.org/licenses/by/4.0/.
 
 on:
   workflow_dispatch:
@@ -182,19 +192,28 @@ jobs:
               echo "::error::neither GEOIP_LICENSE_KEY nor DEPLOY_TOKEN is available to this repository"; exit 1
             fi
             api() { curl -fsSL --retry 3 -m 300 -H "Authorization: Bearer ${DEPLOY_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
-            if ! api -H "Accept: application/vnd.github.raw" -o data/city.mmdb \
-                "https://api.github.com/repos/${CLIENT_DB_REPO}/git/blobs/${CLIENT_DB_BLOB}"; then
-              echo "::error::DEPLOY_TOKEN cannot read ${CLIENT_DB_REPO} (blob ${CLIENT_DB_BLOB}): give it read access to that repository, or set the GEOIP_LICENSE_KEY secret"; exit 1
+            # the same blob is in every client repo: the first one DEPLOY_TOKEN can read
+            src=""
+            for repo in ${CLIENT_DB_REPOS}; do
+              if api -H "Accept: application/vnd.github.raw" -o data/city.mmdb \
+                  "https://api.github.com/repos/${repo}/git/blobs/${CLIENT_DB_BLOB}" 2>/dev/null; then
+                src="${repo}"; break
+              fi
+              echo "DEPLOY_TOKEN cannot read ${repo}"
+            done
+            if [[ -z "${src}" ]]; then
+              echo "::error::DEPLOY_TOKEN cannot read the GeoLite2-City.mmdb blob ${CLIENT_DB_BLOB} in ${CLIENT_DB_REPOS}: give it read access to one of them, or set the GEOIP_LICENSE_KEY secret"; exit 1
             fi
             got="$(git hash-object data/city.mmdb)"
             if [[ "${got}" != "${CLIENT_DB_BLOB}" ]]; then
-              echo "::error::${CLIENT_DB_REPO} blob is ${got}, expected ${CLIENT_DB_BLOB}"; exit 1
+              echo "::error::${src} blob is ${got}, expected ${CLIENT_DB_BLOB}"; exit 1
             fi
             for f in LICENSE.txt COPYRIGHT.txt; do
               api -H "Accept: application/vnd.github.raw" -o "data/${f}" \
-                "https://api.github.com/repos/${CLIENT_DB_REPO}/contents/${CLIENT_DB_LICENSE_DIR}/${f}"
+                "https://api.github.com/repos/${src}/contents/${CLIENT_DB_LICENSE_DIR}/${f}" 2>/dev/null \
+                || printf '%s\n' "${CLIENT_DB_LICENSE_TXT}" > "data/${f}"
             done
-            echo "MaxMind GeoLite2-City as shipped in the Ambit Client apps: ${CLIENT_DB_REPO} ${CLIENT_DB_PATH} (git blob ${CLIENT_DB_BLOB})" > data/SOURCE.txt
+            echo "MaxMind GeoLite2-City as shipped in the Ambit Client apps: ${src} (git blob ${CLIENT_DB_BLOB}, AmbitClientLinux ${CLIENT_DB_PATH})" > data/SOURCE.txt
           fi
           ls -l data
           {
