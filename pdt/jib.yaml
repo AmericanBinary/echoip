@@ -1,0 +1,45 @@
+# PDT image build file (.github/workflows/pdt-image.yaml): the layout of
+# jib.yaml plus the GeoIP databases fetched at build time into data/ and an
+# entrypoint that passes -f/-c/-a for the databases present (pdt/entrypoint.sh).
+# Never used by build.yaml, so the released images do not change.
+apiVersion: jib/v1alpha1
+kind: BuildFile
+
+from:
+  image: ghcr.io/americanbinary/container-images-base-alpine:latest
+  platforms:
+    - architecture: ${arch}
+      os: linux
+
+creationTime: 1970-01-01T00:00:01Z
+format: Docker
+
+workingDirectory: /opt/echoip
+
+entrypoint:
+  - /opt/echoip/entrypoint.sh
+cmd:
+  - "-p"
+  - "-r"
+  - "-H"
+  - "X-Forwarded-For"
+
+layers:
+  entries:
+    - name: app
+      files:
+        - src: ${file}
+          dest: /opt/echoip/echoip
+          properties:
+            filePermissions: 755
+        - src: html
+          dest: /opt/echoip/html
+        - src: pdt/entrypoint.sh
+          dest: /opt/echoip/entrypoint.sh
+          properties:
+            filePermissions: 755
+    # *.mmdb plus the MaxMind LICENSE.txt / COPYRIGHT.txt / SOURCE.txt
+    - name: geoip-data
+      files:
+        - src: data
+          dest: /opt/echoip/data
